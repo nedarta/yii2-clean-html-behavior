@@ -1,0 +1,22 @@
+{
+    "name": "nedarta/yii2-clean-html-behavior",
+    "description": "A Yii2 behavior to clean and sanitize HTML content in ActiveRecord attributes.",
+    "type": "yii2-extension",
+    "keywords": ["yii2", "behavior", "html", "purifier"],
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Edgars Karlsons",
+            "email": "edgars@nedarta.com"
+        }
+    ],
+    "require": {
+        "yiisoft/yii2": "~2.0.0",
+        "ezyang/htmlpurifier": "^4.13"
+    },
+    "autoload": {
+        "psr-4": {
+            "nedarta\\behaviors\\": "src/behaviors/"
+        }
+    }
+}
