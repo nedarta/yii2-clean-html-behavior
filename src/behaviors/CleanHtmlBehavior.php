@@ -201,7 +201,7 @@ class CleanHtmlBehavior extends Behavior
      */
     protected function addSpacesAfterPunctuation($content)
     {
-        $pattern = '~\b(?:https?://\S+|www\.\S+)\b(*SKIP)(*FAIL)|([.,;:!?])([^ \n])~';
+        $pattern = '~\b(?:https?://\S+|www\.\S+)\b(*SKIP)(*FAIL)|\d[.,:](?=\d)(*SKIP)(*FAIL)|([.,;:!?])([^ \n])~';
         return preg_replace($pattern, '$1 $2', $content);
     }
 
