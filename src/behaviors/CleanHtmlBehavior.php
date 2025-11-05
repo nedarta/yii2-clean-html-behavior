@@ -139,6 +139,11 @@ class CleanHtmlBehavior extends Behavior
         // Convert divs and spans to paragraphs with proper line breaks
         $html = $this->convertDivsToParagraphs($html);
 
+        if (!$this->preserveLineBreaks) {
+            $lineBreakReplacement = $this->convertLineBreaks ? "\n" : ' ';
+            $html = preg_replace('/<br\b[^>]*>/i', $lineBreakReplacement, $html);
+        }
+
         // Clean HTML with HtmlPurifier
         $html = HtmlPurifier::process($html, $this->htmlPurifierConfig);
 
@@ -149,13 +154,29 @@ class CleanHtmlBehavior extends Behavior
         // Handle line breaks conversion
         if (!$this->preserveLineBreaks) {
             if ($this->convertLineBreaks === 'p') {
-                $html = $this->convertToParagraphs($html);
+                if (!$this->containsBlockMarkup($html)) {
+                    $paragraphs = array_filter(array_map('trim', preg_split('/\r?\n+/', $html)));
+                    if (!empty($paragraphs)) {
+                        $html = '<p>' . implode('</p><p>', $paragraphs) . '</p>';
+                    } else {
+                        $html = '';
+                    }
+                } else {
+                    $html = preg_replace('/\r?\n+/', ' ', $html);
+                }
             } elseif ($this->convertLineBreaks === 'ul') {
-                $html = $this->convertToList($html);
+                if (!$this->containsBlockMarkup($html)) {
+                    $lines = array_filter(array_map('trim', preg_split('/\r?\n+/', $html)));
+                    if (!empty($lines)) {
+                        $html = '<ul><li>' . implode('</li><li>', $lines) . '</li></ul>';
+                    } else {
+                        $html = '';
+                    }
+                } else {
+                    $html = preg_replace('/\r?\n+/', ' ', $html);
+                }
             } else {
-                // Remove all line breaks
-                $html = preg_replace('/\s*<br\s*\/?>\s*/i', ' ', $html);
-                $html = str_replace("\n", ' ', $html);
+                $html = preg_replace('/\r?\n+/', ' ', $html);
             }
         }
 
@@ -196,8 +217,7 @@ class CleanHtmlBehavior extends Behavior
      */
     protected function removeDoubleSpaces($content)
     {
-        // Don't collapse spaces inside tags
-        return preg_replace('/(?<=>)\s+(?=<)|(?<=\w)\s{2,}(?=\w)/', ' ', $content);
+        return preg_replace('/[ \t]{2,}/', ' ', $content);
     }
 
     /**
@@ -207,10 +227,11 @@ class CleanHtmlBehavior extends Behavior
     {
         // Skip URLs and numbers
         $pattern = '~\b(?:https?://\S+|www\.\S+)\b(*SKIP)(*FAIL)'
-            . '|\d[.,:](?=\d)(*SKIP)(*FAIL)'
-            . '|\.{2,}(*SKIP)(*FAIL)'
-            . '|([.,;:!?])(?=[^\s])~u';
-        return preg_replace($pattern, '$1 ', $content);
+            . '|&[#\w]+;(*SKIP)(*FAIL)'
+            . '|(?<=\d)(?:[.,:])(?=(?:\s|&nbsp;|&#160;|</?[^>]+>)*\d)(*SKIP)(*FAIL)'
+            . '|(?<=\d)(?:[-\x{2013}])(?=(?:\s|&nbsp;|&#160;|</?[^>]+>)*\d)(*SKIP)(*FAIL)'
+            . '|([.,;:!?])([^ \n])~u';
+        return preg_replace($pattern, '$1 $2', $content);
     }
 
     /**
@@ -218,71 +239,178 @@ class CleanHtmlBehavior extends Behavior
      */
     protected function convertDivsToParagraphs($html)
     {
-        // Simple regex approach - more reliable than DOMDocument for this use case
-        // Convert divs to double line breaks
-        $html = preg_replace('~<div[^>]*>\s*~i', "\n\n", $html);
-        $html = preg_replace('~\s*</div>~i', "\n\n", $html);
-        
-        // Convert spans to simple spaces
-        $html = preg_replace('~<span[^>]*>~i', '', $html);
-        $html = preg_replace('~</span>~i', '', $html);
-        
-        // Convert br tags to newlines for now
-        $html = preg_replace('~<br\s*/?>~i', "\n", $html);
-        
-        return $html;
+        $doc = new \DOMDocument();
+        $wrappedHtml = '<body>' . $html . '</body>';
+        libxml_use_internal_errors(true);
+        $doc->loadHTML('<?xml encoding="UTF-8">' . $wrappedHtml, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+        libxml_use_internal_errors(false);
+
+        $body = $doc->getElementsByTagName('body')->item(0);
+        if ($body) {
+            $this->normalizeContainerNodes($body);
+            $cleanHtml = '';
+            foreach ($body->childNodes as $child) {
+                $cleanHtml .= $doc->saveHTML($child);
+            }
+            return trim($cleanHtml);
+        }
+
+        return trim($doc->saveHTML());
     }
 
     /**
-     * Converts line breaks to paragraphs.
+     * Recursively normalizes container tags and removes unwanted attributes.
      */
-    protected function convertToParagraphs($html)
+    protected function normalizeContainerNodes(\DOMNode $node)
     {
-        // Remove existing paragraph tags
-        $html = preg_replace('~</?p[^>]*>~i', '', $html);
-        
-        // Split by double line breaks or existing block elements
-        $blocks = preg_split('~\n\s*\n+~', $html);
-        
-        $paragraphs = [];
-        foreach ($blocks as $block) {
-            $block = trim($block);
-            if ($block === '') {
-                continue;
-            }
-            
-            // Don't wrap list items or table elements
-            if (preg_match('~^<(ul|ol|li|table|tr|td|th)~i', $block)) {
-                $paragraphs[] = $block;
-            } else {
-                // Remove single line breaks within the block
-                $block = preg_replace('~\n~', ' ', $block);
-                $paragraphs[] = '<p>' . $block . '</p>';
+        $children = [];
+        foreach ($node->childNodes as $child) {
+            $children[] = $child;
+        }
+
+        foreach ($children as $child) {
+            if ($child instanceof \DOMElement) {
+                $this->normalizeContainerNodes($child);
             }
         }
-        
-        return implode("\n", $paragraphs);
+
+        if ($node instanceof \DOMElement) {
+            $this->removeUnwantedAttributes($node);
+
+            $tagName = strtolower($node->tagName);
+            if ($tagName === 'span') {
+                $this->unwrapElement($node);
+            } elseif ($tagName === 'div') {
+                $this->splitElementIntoParagraphs($node);
+            }
+        }
     }
 
     /**
-     * Converts line breaks to an unordered list.
+     * Removes container element but preserves its children.
      */
-    protected function convertToList($html)
+    protected function unwrapElement(\DOMElement $element)
     {
-        // Strip all HTML tags first
-        $text = strip_tags($html);
-        
-        // Split by line breaks
-        $lines = array_filter(array_map('trim', explode("\n", $text)));
-        
-        if (empty($lines)) {
-            return '';
+        $parent = $element->parentNode;
+        if (!$parent) {
+            return;
         }
-        
-        $items = array_map(function($line) {
-            return '<li>' . htmlspecialchars($line, ENT_QUOTES, 'UTF-8') . '</li>';
-        }, $lines);
-        
-        return '<ul>' . implode('', $items) . '</ul>';
+
+        while ($element->firstChild) {
+            $child = $element->firstChild;
+            $element->removeChild($child);
+            $parent->insertBefore($child, $element);
+        }
+
+        $parent->removeChild($element);
+    }
+
+    /**
+     * Splits a container element into one or more paragraphs.
+     */
+    protected function splitElementIntoParagraphs(\DOMElement $element)
+    {
+        $parent = $element->parentNode;
+        if (!$parent) {
+            return;
+        }
+
+        $doc = $element->ownerDocument;
+        $paragraph = $doc->createElement('p');
+
+        while ($element->firstChild) {
+            $child = $element->firstChild;
+
+            if ($child instanceof \DOMElement) {
+                $tagName = strtolower($child->tagName);
+
+                if ($tagName === 'br') {
+                    $element->removeChild($child);
+                    $this->finalizeParagraph($parent, $paragraph, $element);
+                    $paragraph = $doc->createElement('p');
+                    continue;
+                }
+
+                if (in_array($tagName, ['p', 'div', 'ul', 'ol', 'table', 'tr', 'td', 'th', 'blockquote', 'pre'], true)) {
+                    $this->finalizeParagraph($parent, $paragraph, $element);
+                    $parent->insertBefore($child, $element);
+                    $paragraph = $doc->createElement('p');
+                    continue;
+                }
+            }
+
+            $paragraph->appendChild($child);
+        }
+
+        $this->finalizeParagraph($parent, $paragraph, $element);
+
+        if ($element->parentNode === $parent) {
+            $parent->removeChild($element);
+        }
+    }
+
+    /**
+     * Finalizes and inserts a paragraph before the reference element.
+     */
+    protected function finalizeParagraph(\DOMNode $parent, \DOMElement $paragraph, \DOMElement $reference)
+    {
+        $this->trimWhitespaceNodes($paragraph);
+
+        if ($paragraph->hasChildNodes()) {
+            $parent->insertBefore($paragraph, $reference);
+            $this->removeUnwantedAttributes($paragraph);
+        }
+    }
+
+    /**
+     * Trims leading and trailing whitespace-only text nodes from an element.
+     */
+    protected function trimWhitespaceNodes(\DOMElement $element)
+    {
+        while ($element->firstChild instanceof \DOMText && trim($element->firstChild->wholeText) === '') {
+            $element->removeChild($element->firstChild);
+        }
+
+        while ($element->lastChild instanceof \DOMText && trim($element->lastChild->wholeText) === '') {
+            $element->removeChild($element->lastChild);
+        }
+
+        if ($element->firstChild instanceof \DOMText) {
+            $element->firstChild->data = ltrim($element->firstChild->data);
+        }
+
+        if ($element->lastChild instanceof \DOMText) {
+            $element->lastChild->data = rtrim($element->lastChild->data);
+        }
+    }
+
+    /**
+     * Detects whether the HTML contains block-level markup already.
+     */
+    protected function containsBlockMarkup($html)
+    {
+        return (bool) preg_match('/<(?:p|ul|ol|li|table|tr|td|th|blockquote|h[1-6]|pre)\b/i', $html);
+    }
+
+    /**
+     * Removes class-like attributes that should not survive purification.
+     */
+    protected function removeUnwantedAttributes(\DOMElement $element)
+    {
+        if (!$element->hasAttributes()) {
+            return;
+        }
+
+        $attributesToStrip = ['class', 'style', 'id', 'dir', 'role', 'tabindex', 'contenteditable', 'spellcheck', 'attributionsrc'];
+
+        foreach (iterator_to_array($element->attributes) as $attribute) {
+            $name = strtolower($attribute->name);
+            if (in_array($name, $attributesToStrip, true)
+                || strpos($name, 'data-') === 0
+                || strpos($name, 'aria-') === 0
+            ) {
+                $element->removeAttributeNode($attribute);
+            }
+        }
     }
 }
