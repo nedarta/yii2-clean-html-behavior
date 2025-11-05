@@ -42,7 +42,7 @@ class CleanHtmlBehavior extends Behavior
         'HTML.Allowed' => 'p,b,i,u,ul,ol,li,a[href],table,tr,td,th',
         'AutoFormat.RemoveEmpty' => true,
         'AutoFormat.RemoveEmpty.RemoveNbsp' => true,
-        'AutoFormat.AutoParagraph' => true,
+        'AutoFormat.AutoParagraph' => false,
         'HTML.TargetBlank' => true,
         'Attr.AllowedFrameTargets' => ['_blank'],
         'HTML.Nofollow' => true,
@@ -128,6 +128,7 @@ class CleanHtmlBehavior extends Behavior
             return $html;
         }
 
+        // Store emoji before processing if needed
         if ($this->keepEmoji) {
             $html = $this->storeEmoji($html);
         }
@@ -135,7 +136,7 @@ class CleanHtmlBehavior extends Behavior
         // Normalize line endings
         $html = str_replace(["\r\n", "\r"], "\n", $html);
 
-        // Convert divs to paragraphs
+        // Convert divs and spans to paragraphs with proper line breaks
         $html = $this->convertDivsToParagraphs($html);
 
         // Clean HTML with HtmlPurifier
@@ -145,21 +146,20 @@ class CleanHtmlBehavior extends Behavior
         $html = $this->addSpacesAfterPunctuation($html);
         $html = $this->removeDoubleSpaces($html);
 
+        // Handle line breaks conversion
         if (!$this->preserveLineBreaks) {
             if ($this->convertLineBreaks === 'p') {
-                $html = nl2br($html);
-                $html = preg_replace('/(<br\s*\/?>\s*)+/', "</p><p>", $html);
-                $html = "<p>" . trim($html, "<p></p>") . "</p>";
+                $html = $this->convertToParagraphs($html);
             } elseif ($this->convertLineBreaks === 'ul') {
-                $lines = array_filter(array_map('trim', explode("\n", $html)));
-                if (!empty($lines)) {
-                    $html = "<ul><li>" . implode("</li><li>", $lines) . "</li></ul>";
-                }
+                $html = $this->convertToList($html);
             } else {
-                $html = str_replace(["\n", "<br>", "<br/>", "<br />"], ' ', $html);
+                // Remove all line breaks
+                $html = preg_replace('/\s*<br\s*\/?>\s*/i', ' ', $html);
+                $html = str_replace("\n", ' ', $html);
             }
         }
 
+        // Restore emoji if they were stored
         if ($this->keepEmoji) {
             $html = $this->restoreEmoji($html);
         }
@@ -173,7 +173,10 @@ class CleanHtmlBehavior extends Behavior
     protected function storeEmoji($content)
     {
         $this->emojiMap = [];
-        return preg_replace_callback('/[\x{1F000}-\x{1F9FF}]/u', function ($match) {
+        // More comprehensive emoji pattern covering multiple Unicode ranges
+        $pattern = '/[\x{1F000}-\x{1F9FF}\x{2600}-\x{26FF}\x{2700}-\x{27BF}\x{1F300}-\x{1F5FF}\x{1F600}-\x{1F64F}\x{1F680}-\x{1F6FF}\x{1F900}-\x{1F9FF}\x{1FA00}-\x{1FA6F}\x{1FA70}-\x{1FAFF}\x{231A}-\x{231B}\x{23E9}-\x{23EC}\x{23F0}\x{23F3}\x{25FD}-\x{25FE}\x{2614}-\x{2615}\x{2648}-\x{2653}\x{267F}\x{2693}\x{26A1}\x{26AA}-\x{26AB}\x{26BD}-\x{26BE}\x{26C4}-\x{26C5}\x{26CE}\x{26D4}\x{26EA}\x{26F2}-\x{26F3}\x{26F5}\x{26FA}\x{26FD}\x{2705}\x{270A}-\x{270B}\x{2728}\x{274C}\x{274E}\x{2753}-\x{2755}\x{2757}\x{2795}-\x{2797}\x{27B0}\x{27BF}\x{2B1B}-\x{2B1C}\x{2B50}\x{2B55}]/u';
+        
+        return preg_replace_callback($pattern, function ($match) {
             $placeholder = '###EMOJI_' . count($this->emojiMap) . '###';
             $this->emojiMap[$placeholder] = $match[0];
             return $placeholder;
@@ -193,7 +196,8 @@ class CleanHtmlBehavior extends Behavior
      */
     protected function removeDoubleSpaces($content)
     {
-        return preg_replace('/\s+/', ' ', $content);
+        // Don't collapse spaces inside tags
+        return preg_replace('/(?<=>)\s+(?=<)|(?<=\w)\s{2,}(?=\w)/', ' ', $content);
     }
 
     /**
@@ -201,11 +205,12 @@ class CleanHtmlBehavior extends Behavior
      */
     protected function addSpacesAfterPunctuation($content)
     {
+        // Skip URLs and numbers
         $pattern = '~\b(?:https?://\S+|www\.\S+)\b(*SKIP)(*FAIL)'
             . '|\d[.,:](?=\d)(*SKIP)(*FAIL)'
-            . '|\d[-\x{2013}](?=\d)(*SKIP)(*FAIL)'
-            . '|([.,;:!?])([^ \n])~u';
-        return preg_replace($pattern, '$1 $2', $content);
+            . '|\.{2,}(*SKIP)(*FAIL)'
+            . '|([.,;:!?])(?=[^\s])~u';
+        return preg_replace($pattern, '$1 ', $content);
     }
 
     /**
@@ -213,21 +218,71 @@ class CleanHtmlBehavior extends Behavior
      */
     protected function convertDivsToParagraphs($html)
     {
-        $doc = new \DOMDocument();
-        $html = mb_convert_encoding($html, 'HTML-ENTITIES', 'UTF-8');
-        libxml_use_internal_errors(true);
-        $doc->loadHTML($html, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
-        libxml_use_internal_errors(false);
+        // Simple regex approach - more reliable than DOMDocument for this use case
+        // Convert divs to double line breaks
+        $html = preg_replace('~<div[^>]*>\s*~i', "\n\n", $html);
+        $html = preg_replace('~\s*</div>~i', "\n\n", $html);
+        
+        // Convert spans to simple spaces
+        $html = preg_replace('~<span[^>]*>~i', '', $html);
+        $html = preg_replace('~</span>~i', '', $html);
+        
+        // Convert br tags to newlines for now
+        $html = preg_replace('~<br\s*/?>~i', "\n", $html);
+        
+        return $html;
+    }
 
-        $xpath = new \DOMXPath($doc);
-        foreach ($xpath->query('//div | //span') as $element) {
-            $p = $doc->createElement('p');
-            while ($element->firstChild) {
-                $p->appendChild($element->firstChild);
+    /**
+     * Converts line breaks to paragraphs.
+     */
+    protected function convertToParagraphs($html)
+    {
+        // Remove existing paragraph tags
+        $html = preg_replace('~</?p[^>]*>~i', '', $html);
+        
+        // Split by double line breaks or existing block elements
+        $blocks = preg_split('~\n\s*\n+~', $html);
+        
+        $paragraphs = [];
+        foreach ($blocks as $block) {
+            $block = trim($block);
+            if ($block === '') {
+                continue;
             }
-            $element->parentNode->replaceChild($p, $element);
+            
+            // Don't wrap list items or table elements
+            if (preg_match('~^<(ul|ol|li|table|tr|td|th)~i', $block)) {
+                $paragraphs[] = $block;
+            } else {
+                // Remove single line breaks within the block
+                $block = preg_replace('~\n~', ' ', $block);
+                $paragraphs[] = '<p>' . $block . '</p>';
+            }
         }
+        
+        return implode("\n", $paragraphs);
+    }
 
-        return trim($doc->saveHTML());
+    /**
+     * Converts line breaks to an unordered list.
+     */
+    protected function convertToList($html)
+    {
+        // Strip all HTML tags first
+        $text = strip_tags($html);
+        
+        // Split by line breaks
+        $lines = array_filter(array_map('trim', explode("\n", $text)));
+        
+        if (empty($lines)) {
+            return '';
+        }
+        
+        $items = array_map(function($line) {
+            return '<li>' . htmlspecialchars($line, ENT_QUOTES, 'UTF-8') . '</li>';
+        }, $lines);
+        
+        return '<ul>' . implode('', $items) . '</ul>';
     }
 }
