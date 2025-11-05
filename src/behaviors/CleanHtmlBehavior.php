@@ -135,7 +135,7 @@ class CleanHtmlBehavior extends Behavior
         // Normalize line endings
         $html = str_replace(["\r\n", "\r"], "\n", $html);
 
-        // Convert divs to paragraphs
+        // Normalize container tags and strip unwanted attributes
         $html = $this->convertDivsToParagraphs($html);
 
         // Clean HTML with HtmlPurifier
@@ -220,15 +220,111 @@ class CleanHtmlBehavior extends Behavior
         $doc->loadHTML($html, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
         libxml_use_internal_errors(false);
 
-        $xpath = new \DOMXPath($doc);
-        foreach ($xpath->query('//div | //span') as $element) {
-            $p = $doc->createElement('p');
-            while ($element->firstChild) {
-                $p->appendChild($element->firstChild);
+        $body = $doc->getElementsByTagName('body')->item(0);
+        if ($body) {
+            $this->normalizeContainerNodes($body);
+            $cleanHtml = '';
+            foreach ($body->childNodes as $child) {
+                $cleanHtml .= $doc->saveHTML($child);
             }
-            $element->parentNode->replaceChild($p, $element);
+            return trim($cleanHtml);
         }
 
         return trim($doc->saveHTML());
+    }
+
+    /**
+     * Recursively normalizes container tags and removes unwanted attributes.
+     */
+    protected function normalizeContainerNodes(\DOMNode $node)
+    {
+        $children = [];
+        foreach ($node->childNodes as $child) {
+            $children[] = $child;
+        }
+
+        foreach ($children as $child) {
+            if ($child instanceof \DOMElement) {
+                $this->normalizeContainerNodes($child);
+            }
+        }
+
+        if ($node instanceof \DOMElement) {
+            $this->removeUnwantedAttributes($node);
+
+            $tagName = strtolower($node->tagName);
+            if ($tagName === 'span') {
+                $this->unwrapElement($node);
+            } elseif ($tagName === 'div') {
+                if ($this->containsBlockElement($node)) {
+                    $this->unwrapElement($node);
+                } else {
+                    $replacement = $node->ownerDocument->createElement('p');
+                    while ($node->firstChild) {
+                        $replacement->appendChild($node->firstChild);
+                    }
+                    $node->parentNode->replaceChild($replacement, $node);
+                    $this->removeUnwantedAttributes($replacement);
+                }
+            }
+        }
+    }
+
+    /**
+     * Removes container element but preserves its children.
+     */
+    protected function unwrapElement(\DOMElement $element)
+    {
+        $parent = $element->parentNode;
+        if (!$parent) {
+            return;
+        }
+
+        while ($element->firstChild) {
+            $child = $element->firstChild;
+            $element->removeChild($child);
+            $parent->insertBefore($child, $element);
+        }
+
+        $parent->removeChild($element);
+    }
+
+    /**
+     * Detects whether the element contains nested block-level elements.
+     */
+    protected function containsBlockElement(\DOMElement $element)
+    {
+        foreach ($element->childNodes as $child) {
+            if ($child instanceof \DOMElement) {
+                $tagName = strtolower($child->tagName);
+                if (in_array($tagName, ['p', 'div', 'ul', 'ol', 'table', 'tr', 'td', 'th'], true)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Removes class-like attributes that should not survive purification.
+     */
+    protected function removeUnwantedAttributes(\DOMElement $element)
+    {
+        if (!$element->hasAttributes()) {
+            return;
+        }
+
+        $attributesToStrip = ['class', 'style', 'id', 'dir', 'role', 'tabindex', 'contenteditable', 'spellcheck', 'attributionsrc'];
+
+        foreach (iterator_to_array($element->attributes) as $attribute) {
+            $name = strtolower($attribute->name);
+            if (in_array($name, $attributesToStrip, true)
+                || strpos($name, 'data-') === 0
+                || strpos($name, 'aria-') === 0
+            ) {
+                $element->removeAttributeNode($attribute);
+            }
+        }
     }
 }
