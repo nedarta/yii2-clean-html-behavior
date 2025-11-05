@@ -228,6 +228,7 @@ class CleanHtmlBehavior extends Behavior
         // Skip URLs and numbers
         $pattern = '~\b(?:https?://\S+|www\.\S+)\b(*SKIP)(*FAIL)'
             . '|&[#\w]+;(*SKIP)(*FAIL)'
+            . '|\.{2,}(*SKIP)(*FAIL)'
             . '|(?<=\d)(?:[.,:])(?=(?:\s|&nbsp;|&#160;|</?[^>]+>)*\d)(*SKIP)(*FAIL)'
             . '|(?<=\d)(?:[-\x{2013}])(?=(?:\s|&nbsp;|&#160;|</?[^>]+>)*\d)(*SKIP)(*FAIL)'
             . '|([.,;:!?])([^ \n])~u';
