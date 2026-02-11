@@ -2,7 +2,12 @@
     "name": "nedarta/yii2-clean-html-behavior",
     "description": "A Yii2 behavior to clean and sanitize HTML content in ActiveRecord attributes.",
     "type": "yii2-extension",
-    "keywords": ["yii2", "behavior", "html", "purifier"],
+    "keywords": [
+        "yii2",
+        "behavior",
+        "html",
+        "purifier"
+    ],
     "license": "MIT",
     "authors": [
         {
@@ -10,13 +15,36 @@
             "email": "edgars@nedarta.com"
         }
     ],
+    "repositories": [
+        {
+            "type": "composer",
+            "url": "https://asset-packagist.org"
+        }
+    ],
     "require": {
         "yiisoft/yii2": "~2.0.0",
         "ezyang/htmlpurifier": "^4.13"
     },
+    "require-dev": {
+        "phpunit/phpunit": "^9.5"
+    },
     "autoload": {
         "psr-4": {
             "nedarta\\behaviors\\": "src/behaviors/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "nedarta\\behaviors\\tests\\": "tests/"
+        }
+    },
+    "minimum-stability": "stable",
+    "scripts": {
+        "test": "vendor/bin/phpunit"
+    },
+    "config": {
+        "allow-plugins": {
+            "yiisoft/yii2-composer": true
         }
     }
 }

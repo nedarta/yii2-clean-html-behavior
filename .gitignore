@@ -1,0 +1,45 @@
+# Composer
+/vendor/
+/composer.phar
+
+# PHPUnit
+.phpunit.result.cache
+
+# Composer lock (for libraries you might choose to keep it, but often ignored)
+#composer.lock
+
+# Runtime / logs
+/runtime/
+/logs/
+
+# IDEs and editors
+/.idea/
+/.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Node
+/node_modules/
+
+# Coverage
+/coverage/
+
+# Test output
+/tests/_output/
+
+# Environment files
+.env
+.env.*
+
+# assets
+/public/assets/
+
+# Build files
+/dist/
+
+# Other
+*.log
+*.cache
+*.ps1

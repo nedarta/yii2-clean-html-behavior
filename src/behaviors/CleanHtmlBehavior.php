@@ -34,384 +34,397 @@ use yii\base\InvalidConfigException;
  */
 class CleanHtmlBehavior extends Behavior
 {
-    /** @var array List of attributes to clean */
-    public $attributes = [];
+	/** @var array List of attributes to clean */
+	public $attributes = [];
 
-    /** @var array HtmlPurifier configuration */
-    public $htmlPurifierConfig = [
-        'HTML.Allowed' => 'p,b,i,u,ul,ol,li,a[href],table,tr,td,th',
-        'AutoFormat.RemoveEmpty' => true,
-        'AutoFormat.RemoveEmpty.RemoveNbsp' => true,
-        'AutoFormat.AutoParagraph' => false,
-        'HTML.TargetBlank' => true,
-        'Attr.AllowedFrameTargets' => ['_blank'],
-        'HTML.Nofollow' => true,
-        'CSS.AllowedProperties' => [],
-    ];
+	/** @var array HtmlPurifier configuration */
+	public $htmlPurifierConfig = [
+		'HTML.Allowed' => 'p,b,i,u,ul,ol,li,a[href],table,tr,td,th,br',
+		'AutoFormat.RemoveEmpty' => true,
+		'AutoFormat.RemoveEmpty.RemoveNbsp' => true,
+		'AutoFormat.AutoParagraph' => false,
+		'HTML.TargetBlank' => true,
+		'Attr.AllowedFrameTargets' => ['_blank'],
+		'HTML.Nofollow' => true,
+		'CSS.AllowedProperties' => [],
+	];
 
-    /** @var bool Whether to preserve `<br>` tags */
-    public $preserveLineBreaks = true;
+	/** @var bool Whether to preserve `<br>` tags */
+	public $preserveLineBreaks = true;
 
-    /** @var string|false Convert line breaks to 'p' (paragraphs), 'ul' (unordered list), or `false` (remove them) */
-    public $convertLineBreaks = false;
+	/** @var string|false Convert line breaks to 'p' (paragraphs), 'ul' (unordered list), or `false` (remove them) */
+	public $convertLineBreaks = false;
 
-    /** @var bool Whether to preserve emoji characters */
-    public $keepEmoji = false;
+	/** @var bool Whether to preserve emoji characters */
+	public $keepEmoji = false;
 
-    /** @var array Temporary storage for emoji placeholders */
-    private $emojiMap = [];
+	/** @var array Temporary storage for emoji placeholders */
+	private $emojiMap = [];
 
-    /**
-     * @inheritdoc
-     */
-    public function init()
-    {
-        parent::init();
+	/**
+	 * @inheritdoc
+	 */
+	public function init()
+	{
+		parent::init();
 
-        if (empty($this->attributes)) {
-            throw new InvalidConfigException('Attributes cannot be empty.');
-        }
-    }
+		if (empty($this->attributes)) {
+			throw new InvalidConfigException('Attributes cannot be empty.');
+		}
+	}
 
-    /**
-     * @inheritdoc
-     */
-    public function events()
-    {
-        return [
-            ActiveRecord::EVENT_BEFORE_VALIDATE => 'beforeValidate',
-            ActiveRecord::EVENT_BEFORE_INSERT => 'beforeSave',
-            ActiveRecord::EVENT_BEFORE_UPDATE => 'beforeSave',
-        ];
-    }
+	/**
+	 * @inheritdoc
+	 */
+	public function events()
+	{
+		return [
+			ActiveRecord::EVENT_BEFORE_VALIDATE => 'beforeValidate',
+			ActiveRecord::EVENT_BEFORE_INSERT => 'beforeSave',
+			ActiveRecord::EVENT_BEFORE_UPDATE => 'beforeSave',
+		];
+	}
 
-    /**
-     * Cleans HTML content before validation.
-     */
-    public function beforeValidate($event)
-    {
-        $this->cleanAttributes();
-    }
+	/**
+	 * Cleans HTML content before validation.
+	 */
+	public function beforeValidate($event)
+	{
+		$this->cleanAttributes();
+	}
 
-    /**
-     * Cleans HTML content before saving.
-     */
-    public function beforeSave($event)
-    {
-        $this->cleanAttributes();
-    }
+	/**
+	 * Cleans HTML content before saving.
+	 */
+	public function beforeSave($event)
+	{
+		$this->cleanAttributes();
+	}
 
-    /**
-     * Cleans all configured attributes.
-     */
-    protected function cleanAttributes()
-    {
-        foreach ($this->attributes as $attribute) {
-            if ($this->owner->hasProperty($attribute)) {
-                $value = $this->owner->$attribute;
-                if (is_string($value)) {
-                    $this->owner->$attribute = $this->cleanHtml($value);
-                }
-            }
-        }
-    }
+	/**
+	 * Cleans all configured attributes.
+	 */
+	protected function cleanAttributes()
+	{
+		foreach ($this->attributes as $attribute) {
+			if ($this->owner->hasProperty($attribute)) {
+				$value = $this->owner->$attribute;
+				if (is_string($value)) {
+					$this->owner->$attribute = $this->cleanHtml($value);
+				}
+			}
+		}
+	}
 
-    /**
-     * Cleans and formats HTML content.
-     *
-     * @param string $html The HTML content to clean.
-     * @return string The cleaned HTML content.
-     */
-    protected function cleanHtml($html)
-    {
-        if (empty($html)) {
-            return $html;
-        }
+	/**
+	 * Cleans and formats HTML content.
+	 *
+	 * @param string $html The HTML content to clean.
+	 * @return string The cleaned HTML content.
+	 */
+	protected function cleanHtml($html)
+	{
+		if (empty($html)) {
+			return $html;
+		}
 
-        // Store emoji before processing if needed
-        if ($this->keepEmoji) {
-            $html = $this->storeEmoji($html);
-        }
+		// Store emoji before processing if needed, otherwise remove them
+		if ($this->keepEmoji) {
+			$html = $this->storeEmoji($html);
+		} else {
+			$html = $this->removeEmoji($html);
+		}
 
-        // Normalize line endings
-        $html = str_replace(["\r\n", "\r"], "\n", $html);
+		// Normalize line endings
+		$html = str_replace(["\r\n", "\r"], "\n", $html);
 
-        // Convert divs and spans to paragraphs with proper line breaks
-        $html = $this->convertDivsToParagraphs($html);
+		// Convert divs and spans to paragraphs with proper line breaks
+		$html = $this->convertDivsToParagraphs($html);
 
-        if (!$this->preserveLineBreaks) {
-            $lineBreakReplacement = $this->convertLineBreaks ? "\n" : ' ';
-            $html = preg_replace('/<br\b[^>]*>/i', $lineBreakReplacement, $html);
-        }
+		if (!$this->preserveLineBreaks) {
+			$lineBreakReplacement = $this->convertLineBreaks ? "\n" : ' ';
+			$html = preg_replace('/<br\b[^>]*>/i', $lineBreakReplacement, $html);
+		}
 
-        // Clean HTML with HtmlPurifier
-        $html = HtmlPurifier::process($html, $this->htmlPurifierConfig);
+		// Clean HTML with HtmlPurifier
+		$html = HtmlPurifier::process($html, $this->htmlPurifierConfig);
 
-        // Apply formatting
-        $html = $this->addSpacesAfterPunctuation($html);
-        $html = $this->removeDoubleSpaces($html);
+		// Apply formatting
+		$html = $this->addSpacesAfterPunctuation($html);
+		$html = $this->removeDoubleSpaces($html);
 
-        // Handle line breaks conversion
-        if (!$this->preserveLineBreaks) {
-            if ($this->convertLineBreaks === 'p') {
-                if (!$this->containsBlockMarkup($html)) {
-                    $paragraphs = array_filter(array_map('trim', preg_split('/\r?\n+/', $html)));
-                    if (!empty($paragraphs)) {
-                        $html = '<p>' . implode('</p><p>', $paragraphs) . '</p>';
-                    } else {
-                        $html = '';
-                    }
-                } else {
-                    $html = preg_replace('/\r?\n+/', ' ', $html);
-                }
-            } elseif ($this->convertLineBreaks === 'ul') {
-                if (!$this->containsBlockMarkup($html)) {
-                    $lines = array_filter(array_map('trim', preg_split('/\r?\n+/', $html)));
-                    if (!empty($lines)) {
-                        $html = '<ul><li>' . implode('</li><li>', $lines) . '</li></ul>';
-                    } else {
-                        $html = '';
-                    }
-                } else {
-                    $html = preg_replace('/\r?\n+/', ' ', $html);
-                }
-            } else {
-                $html = preg_replace('/\r?\n+/', ' ', $html);
-            }
-        }
+		// Handle line breaks conversion
+		if (!$this->preserveLineBreaks) {
+			if ($this->convertLineBreaks === 'p') {
+				if (!$this->containsBlockMarkup($html)) {
+					$paragraphs = array_filter(array_map('trim', preg_split('/\r?\n+/', $html)));
+					if (!empty($paragraphs)) {
+						$html = '<p>' . implode('</p><p>', $paragraphs) . '</p>';
+					} else {
+						$html = '';
+					}
+				} else {
+					$html = preg_replace('/\r?\n+/', ' ', $html);
+				}
+			} elseif ($this->convertLineBreaks === 'ul') {
+				if (!$this->containsBlockMarkup($html)) {
+					$lines = array_filter(array_map('trim', preg_split('/\r?\n+/', $html)));
+					if (!empty($lines)) {
+						$html = '<ul><li>' . implode('</li><li>', $lines) . '</li></ul>';
+					} else {
+						$html = '';
+					}
+				} else {
+					$html = preg_replace('/\r?\n+/', ' ', $html);
+				}
+			} else {
+				$html = preg_replace('/\r?\n+/', ' ', $html);
+			}
+		}
 
-        // Restore emoji if they were stored
-        if ($this->keepEmoji) {
-            $html = $this->restoreEmoji($html);
-        }
+		// Restore emoji if they were stored
+		if ($this->keepEmoji) {
+			$html = $this->restoreEmoji($html);
+		}
 
-        return trim($html);
-    }
+		return trim($html);
+	}
 
-    /**
-     * Stores emoji characters by replacing them with placeholders.
-     */
-    protected function storeEmoji($content)
-    {
-        $this->emojiMap = [];
-        // More comprehensive emoji pattern covering multiple Unicode ranges
-        $pattern = '/[\x{1F000}-\x{1F9FF}\x{2600}-\x{26FF}\x{2700}-\x{27BF}\x{1F300}-\x{1F5FF}\x{1F600}-\x{1F64F}\x{1F680}-\x{1F6FF}\x{1F900}-\x{1F9FF}\x{1FA00}-\x{1FA6F}\x{1FA70}-\x{1FAFF}\x{231A}-\x{231B}\x{23E9}-\x{23EC}\x{23F0}\x{23F3}\x{25FD}-\x{25FE}\x{2614}-\x{2615}\x{2648}-\x{2653}\x{267F}\x{2693}\x{26A1}\x{26AA}-\x{26AB}\x{26BD}-\x{26BE}\x{26C4}-\x{26C5}\x{26CE}\x{26D4}\x{26EA}\x{26F2}-\x{26F3}\x{26F5}\x{26FA}\x{26FD}\x{2705}\x{270A}-\x{270B}\x{2728}\x{274C}\x{274E}\x{2753}-\x{2755}\x{2757}\x{2795}-\x{2797}\x{27B0}\x{27BF}\x{2B1B}-\x{2B1C}\x{2B50}\x{2B55}]/u';
-        
-        return preg_replace_callback($pattern, function ($match) {
-            $placeholder = '###EMOJI_' . count($this->emojiMap) . '###';
-            $this->emojiMap[$placeholder] = $match[0];
-            return $placeholder;
-        }, $content);
-    }
+	/**
+	 * Stores emoji characters by replacing them with placeholders.
+	 */
+	protected function storeEmoji($content)
+	{
+		$this->emojiMap = [];
+		// More comprehensive emoji pattern covering multiple Unicode ranges
+		$pattern = '/[\x{1F000}-\x{1F9FF}\x{2600}-\x{26FF}\x{2700}-\x{27BF}\x{1F300}-\x{1F5FF}\x{1F600}-\x{1F64F}\x{1F680}-\x{1F6FF}\x{1F900}-\x{1F9FF}\x{1FA00}-\x{1FA6F}\x{1FA70}-\x{1FAFF}\x{231A}-\x{231B}\x{23E9}-\x{23EC}\x{23F0}\x{23F3}\x{25FD}-\x{25FE}\x{2614}-\x{2615}\x{2648}-\x{2653}\x{267F}\x{2693}\x{26A1}\x{26AA}-\x{26AB}\x{26BD}-\x{26BE}\x{26C4}-\x{26C5}\x{26CE}\x{26D4}\x{26EA}\x{26F2}-\x{26F3}\x{26F5}\x{26FA}\x{26FD}\x{2705}\x{270A}-\x{270B}\x{2728}\x{274C}\x{274E}\x{2753}-\x{2755}\x{2757}\x{2795}-\x{2797}\x{27B0}\x{27BF}\x{2B1B}-\x{2B1C}\x{2B50}\x{2B55}]/u';
 
-    /**
-     * Restores emoji characters from placeholders.
-     */
-    protected function restoreEmoji($content)
-    {
-        return str_replace(array_keys($this->emojiMap), array_values($this->emojiMap), $content);
-    }
+		return preg_replace_callback($pattern, function ($match) {
+			$placeholder = '###EMOJI_' . count($this->emojiMap) . '###';
+			$this->emojiMap[$placeholder] = $match[0];
+			return $placeholder;
+		}, $content);
+	}
 
-    /**
-     * Removes multiple consecutive spaces.
-     */
-    protected function removeDoubleSpaces($content)
-    {
-        return preg_replace('/[ \t]{2,}/', ' ', $content);
-    }
+	/**
+	 * Removes emoji characters from content.
+	 */
+	protected function removeEmoji($content)
+	{
+		// Same comprehensive emoji pattern as storeEmoji
+		$pattern = '/[\x{1F000}-\x{1F9FF}\x{2600}-\x{26FF}\x{2700}-\x{27BF}\x{1F300}-\x{1F5FF}\x{1F600}-\x{1F64F}\x{1F680}-\x{1F6FF}\x{1F900}-\x{1F9FF}\x{1FA00}-\x{1FA6F}\x{1FA70}-\x{1FAFF}\x{231A}-\x{231B}\x{23E9}-\x{23EC}\x{23F0}\x{23F3}\x{25FD}-\x{25FE}\x{2614}-\x{2615}\x{2648}-\x{2653}\x{267F}\x{2693}\x{26A1}\x{26AA}-\x{26AB}\x{26BD}-\x{26BE}\x{26C4}-\x{26C5}\x{26CE}\x{26D4}\x{26EA}\x{26F2}-\x{26F3}\x{26F5}\x{26FA}\x{26FD}\x{2705}\x{270A}-\x{270B}\x{2728}\x{274C}\x{274E}\x{2753}-\x{2755}\x{2757}\x{2795}-\x{2797}\x{27B0}\x{27BF}\x{2B1B}-\x{2B1C}\x{2B50}\x{2B55}]/u';
 
-    /**
-     * Adds spaces after punctuation marks, excluding URLs.
-     */
-    protected function addSpacesAfterPunctuation($content)
-    {
-        // Skip URLs and numbers
-        $pattern = '~\b(?:https?://\S+|www\.\S+)\b(*SKIP)(*FAIL)'
-            . '|&[#\w]+;(*SKIP)(*FAIL)'
-            . '|\.{2,}(*SKIP)(*FAIL)'
-            . '|(?<=\d)(?:[.,:])(?=(?:\s|&nbsp;|&#160;|</?[^>]+>)*\d)(*SKIP)(*FAIL)'
-            . '|(?<=\d)(?:[-\x{2013}])(?=(?:\s|&nbsp;|&#160;|</?[^>]+>)*\d)(*SKIP)(*FAIL)'
-            . '|([.,;:!?])([^ \n])~u';
-        return preg_replace($pattern, '$1 $2', $content);
-    }
+		return preg_replace($pattern, '', $content);
+	}
 
-    /**
-     * Converts `<div>` and `<span>` elements to paragraphs.
-     */
-    protected function convertDivsToParagraphs($html)
-    {
-        $doc = new \DOMDocument();
-        $wrappedHtml = '<body>' . $html . '</body>';
-        libxml_use_internal_errors(true);
-        $doc->loadHTML('<?xml encoding="UTF-8">' . $wrappedHtml, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
-        libxml_use_internal_errors(false);
+	/**
+	 * Restores emoji characters from placeholders.
+	 */
+	protected function restoreEmoji($content)
+	{
+		return str_replace(array_keys($this->emojiMap), array_values($this->emojiMap), $content);
+	}
 
-        $body = $doc->getElementsByTagName('body')->item(0);
-        if ($body) {
-            $this->normalizeContainerNodes($body);
-            $cleanHtml = '';
-            foreach ($body->childNodes as $child) {
-                $cleanHtml .= $doc->saveHTML($child);
-            }
-            return trim($cleanHtml);
-        }
+	/**
+	 * Removes multiple consecutive spaces.
+	 */
+	protected function removeDoubleSpaces($content)
+	{
+		return preg_replace('/[ \t]{2,}/', ' ', $content);
+	}
 
-        return trim($doc->saveHTML());
-    }
+	/**
+	 * Adds spaces after punctuation marks, excluding URLs.
+	 */
+	protected function addSpacesAfterPunctuation($content)
+	{
+		// Skip URLs and numbers
+		$pattern = '~\b(?:https?://\S+|www\.\S+)\b(*SKIP)(*FAIL)'
+			. '|&[#\w]+;(*SKIP)(*FAIL)'
+			. '|\.{2,}(*SKIP)(*FAIL)'
+			. '|(?<=\d)(?:[.,:])(?=(?:\s|&nbsp;|&#160;|</?[^>]+>)*\d)(*SKIP)(*FAIL)'
+			. '|(?<=\d)(?:[-\x{2013}])(?=(?:\s|&nbsp;|&#160;|</?[^>]+>)*\d)(*SKIP)(*FAIL)'
+			. '|([.,;:!?])([^ \n])~u';
+		return preg_replace($pattern, '$1 $2', $content);
+	}
 
-    /**
-     * Recursively normalizes container tags and removes unwanted attributes.
-     */
-    protected function normalizeContainerNodes(\DOMNode $node)
-    {
-        $children = [];
-        foreach ($node->childNodes as $child) {
-            $children[] = $child;
-        }
+	/**
+	 * Converts `<div>` and `<span>` elements to paragraphs.
+	 */
+	protected function convertDivsToParagraphs($html)
+	{
+		$doc = new \DOMDocument();
+		$wrappedHtml = '<body>' . $html . '</body>';
+		libxml_use_internal_errors(true);
+		$doc->loadHTML('<?xml encoding="UTF-8">' . $wrappedHtml, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+		libxml_use_internal_errors(false);
 
-        foreach ($children as $child) {
-            if ($child instanceof \DOMElement) {
-                $this->normalizeContainerNodes($child);
-            }
-        }
+		$body = $doc->getElementsByTagName('body')->item(0);
+		if ($body) {
+			$this->normalizeContainerNodes($body);
+			$cleanHtml = '';
+			foreach ($body->childNodes as $child) {
+				$cleanHtml .= $doc->saveHTML($child);
+			}
+			return trim($cleanHtml);
+		}
 
-        if ($node instanceof \DOMElement) {
-            $this->removeUnwantedAttributes($node);
+		return trim($doc->saveHTML());
+	}
 
-            $tagName = strtolower($node->tagName);
-            if ($tagName === 'span') {
-                $this->unwrapElement($node);
-            } elseif ($tagName === 'div') {
-                $this->splitElementIntoParagraphs($node);
-            }
-        }
-    }
+	/**
+	 * Recursively normalizes container tags and removes unwanted attributes.
+	 */
+	protected function normalizeContainerNodes(\DOMNode $node)
+	{
+		$children = [];
+		foreach ($node->childNodes as $child) {
+			$children[] = $child;
+		}
 
-    /**
-     * Removes container element but preserves its children.
-     */
-    protected function unwrapElement(\DOMElement $element)
-    {
-        $parent = $element->parentNode;
-        if (!$parent) {
-            return;
-        }
+		foreach ($children as $child) {
+			if ($child instanceof \DOMElement) {
+				$this->normalizeContainerNodes($child);
+			}
+		}
 
-        while ($element->firstChild) {
-            $child = $element->firstChild;
-            $element->removeChild($child);
-            $parent->insertBefore($child, $element);
-        }
+		if ($node instanceof \DOMElement) {
+			$this->removeUnwantedAttributes($node);
 
-        $parent->removeChild($element);
-    }
+			$tagName = strtolower($node->tagName);
+			if ($tagName === 'span') {
+				$this->unwrapElement($node);
+			} elseif ($tagName === 'div') {
+				$this->splitElementIntoParagraphs($node);
+			}
+		}
+	}
 
-    /**
-     * Splits a container element into one or more paragraphs.
-     */
-    protected function splitElementIntoParagraphs(\DOMElement $element)
-    {
-        $parent = $element->parentNode;
-        if (!$parent) {
-            return;
-        }
+	/**
+	 * Removes container element but preserves its children.
+	 */
+	protected function unwrapElement(\DOMElement $element)
+	{
+		$parent = $element->parentNode;
+		if (!$parent) {
+			return;
+		}
 
-        $doc = $element->ownerDocument;
-        $paragraph = $doc->createElement('p');
+		while ($element->firstChild) {
+			$child = $element->firstChild;
+			$element->removeChild($child);
+			$parent->insertBefore($child, $element);
+		}
 
-        while ($element->firstChild) {
-            $child = $element->firstChild;
+		$parent->removeChild($element);
+	}
 
-            if ($child instanceof \DOMElement) {
-                $tagName = strtolower($child->tagName);
+	/**
+	 * Splits a container element into one or more paragraphs.
+	 */
+	protected function splitElementIntoParagraphs(\DOMElement $element)
+	{
+		$parent = $element->parentNode;
+		if (!$parent) {
+			return;
+		}
 
-                if ($tagName === 'br') {
-                    $element->removeChild($child);
-                    $this->finalizeParagraph($parent, $paragraph, $element);
-                    $paragraph = $doc->createElement('p');
-                    continue;
-                }
+		$doc = $element->ownerDocument;
+		$paragraph = $doc->createElement('p');
 
-                if (in_array($tagName, ['p', 'div', 'ul', 'ol', 'table', 'tr', 'td', 'th', 'blockquote', 'pre'], true)) {
-                    $this->finalizeParagraph($parent, $paragraph, $element);
-                    $parent->insertBefore($child, $element);
-                    $paragraph = $doc->createElement('p');
-                    continue;
-                }
-            }
+		while ($element->firstChild) {
+			$child = $element->firstChild;
 
-            $paragraph->appendChild($child);
-        }
+			if ($child instanceof \DOMElement) {
+				$tagName = strtolower($child->tagName);
 
-        $this->finalizeParagraph($parent, $paragraph, $element);
+				if ($tagName === 'br') {
+					$element->removeChild($child);
+					$this->finalizeParagraph($parent, $paragraph, $element);
+					$paragraph = $doc->createElement('p');
+					continue;
+				}
 
-        if ($element->parentNode === $parent) {
-            $parent->removeChild($element);
-        }
-    }
+				if (in_array($tagName, ['p', 'div', 'ul', 'ol', 'table', 'tr', 'td', 'th', 'blockquote', 'pre'], true)) {
+					$this->finalizeParagraph($parent, $paragraph, $element);
+					$parent->insertBefore($child, $element);
+					$paragraph = $doc->createElement('p');
+					continue;
+				}
+			}
 
-    /**
-     * Finalizes and inserts a paragraph before the reference element.
-     */
-    protected function finalizeParagraph(\DOMNode $parent, \DOMElement $paragraph, \DOMElement $reference)
-    {
-        $this->trimWhitespaceNodes($paragraph);
+			$paragraph->appendChild($child);
+		}
 
-        if ($paragraph->hasChildNodes()) {
-            $parent->insertBefore($paragraph, $reference);
-            $this->removeUnwantedAttributes($paragraph);
-        }
-    }
+		$this->finalizeParagraph($parent, $paragraph, $element);
 
-    /**
-     * Trims leading and trailing whitespace-only text nodes from an element.
-     */
-    protected function trimWhitespaceNodes(\DOMElement $element)
-    {
-        while ($element->firstChild instanceof \DOMText && trim($element->firstChild->wholeText) === '') {
-            $element->removeChild($element->firstChild);
-        }
+		if ($element->parentNode === $parent) {
+			$parent->removeChild($element);
+		}
+	}
 
-        while ($element->lastChild instanceof \DOMText && trim($element->lastChild->wholeText) === '') {
-            $element->removeChild($element->lastChild);
-        }
+	/**
+	 * Finalizes and inserts a paragraph before the reference element.
+	 */
+	protected function finalizeParagraph(\DOMNode $parent, \DOMElement $paragraph, \DOMElement $reference)
+	{
+		$this->trimWhitespaceNodes($paragraph);
 
-        if ($element->firstChild instanceof \DOMText) {
-            $element->firstChild->data = ltrim($element->firstChild->data);
-        }
+		if ($paragraph->hasChildNodes()) {
+			$parent->insertBefore($paragraph, $reference);
+			$this->removeUnwantedAttributes($paragraph);
+		}
+	}
 
-        if ($element->lastChild instanceof \DOMText) {
-            $element->lastChild->data = rtrim($element->lastChild->data);
-        }
-    }
+	/**
+	 * Trims leading and trailing whitespace-only text nodes from an element.
+	 */
+	protected function trimWhitespaceNodes(\DOMElement $element)
+	{
+		while ($element->firstChild instanceof \DOMText && trim($element->firstChild->wholeText) === '') {
+			$element->removeChild($element->firstChild);
+		}
 
-    /**
-     * Detects whether the HTML contains block-level markup already.
-     */
-    protected function containsBlockMarkup($html)
-    {
-        return (bool) preg_match('/<(?:p|ul|ol|li|table|tr|td|th|blockquote|h[1-6]|pre)\b/i', $html);
-    }
+		while ($element->lastChild instanceof \DOMText && trim($element->lastChild->wholeText) === '') {
+			$element->removeChild($element->lastChild);
+		}
 
-    /**
-     * Removes class-like attributes that should not survive purification.
-     */
-    protected function removeUnwantedAttributes(\DOMElement $element)
-    {
-        if (!$element->hasAttributes()) {
-            return;
-        }
+		if ($element->firstChild instanceof \DOMText) {
+			$element->firstChild->data = ltrim($element->firstChild->data);
+		}
 
-        $attributesToStrip = ['class', 'style', 'id', 'dir', 'role', 'tabindex', 'contenteditable', 'spellcheck', 'attributionsrc'];
+		if ($element->lastChild instanceof \DOMText) {
+			$element->lastChild->data = rtrim($element->lastChild->data);
+		}
+	}
 
-        foreach (iterator_to_array($element->attributes) as $attribute) {
-            $name = strtolower($attribute->name);
-            if (in_array($name, $attributesToStrip, true)
-                || strpos($name, 'data-') === 0
-                || strpos($name, 'aria-') === 0
-            ) {
-                $element->removeAttributeNode($attribute);
-            }
-        }
-    }
+	/**
+	 * Detects whether the HTML contains block-level markup already.
+	 */
+	protected function containsBlockMarkup($html)
+	{
+		return (bool) preg_match('/<(?:p|ul|ol|li|table|tr|td|th|blockquote|h[1-6]|pre)\b/i', $html);
+	}
+
+	/**
+	 * Removes class-like attributes that should not survive purification.
+	 */
+	protected function removeUnwantedAttributes(\DOMElement $element)
+	{
+		if (!$element->hasAttributes()) {
+			return;
+		}
+
+		$attributesToStrip = ['class', 'style', 'id', 'dir', 'role', 'tabindex', 'contenteditable', 'spellcheck', 'attributionsrc'];
+
+		foreach (iterator_to_array($element->attributes) as $attribute) {
+			$name = strtolower($attribute->name);
+			if (in_array($name, $attributesToStrip, true)
+				|| strpos($name, 'data-') === 0
+				|| strpos($name, 'aria-') === 0
+			) {
+				$element->removeAttributeNode($attribute);
+			}
+		}
+	}
 }
